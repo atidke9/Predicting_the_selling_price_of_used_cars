@@ -1,0 +1,414 @@
+---
+title: "Selling Price of Used Cars"
+author: "Team-1"
+date: "Today"
+
+# date: "`r Sys.Date()`"
+
+output:
+  html_document:
+    code_folding: hide
+    # number_sections: true
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r basic, include = F}
+# use this function to conveniently load libraries and work smoothly with knitting
+# can add quietly=T option to the require() function
+# the loadPkg function essentially replaced/substituted two functions install.packages() and library() in one step.
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+
+# unload/detact package when done using it
+unloadPkg = function(pkg, character.only = FALSE) { 
+  if(!character.only) { pkg <- as.character(substitute(pkg)) } 
+  search_item <- paste("package", pkg,sep = ":") 
+  while(search_item %in% search()) { detach(search_item, unload = TRUE, character.only = TRUE) } 
+}
+```
+
+```{r setup, include=FALSE}
+# some of common options (and the defaults) are: 
+# include=T, eval=T, echo=T, results='hide'/'asis'/'markup',..., collapse=F, warning=T, message=T, error=T, cache=T, fig.width=6, fig.height=4, fig.dim=c(6,4) #inches, fig.align='left'/'center','right', 
+# knitr::opts_chunk$set(warning = F, results = "markup", message = F)
+knitr::opts_chunk$set(warning = F, results = "hide", message = F)
+# knitr::opts_chunk$set(include = F)
+# knitr::opts_chunk$set(echo = TRUE)
+options(scientific=T, digits = 3) 
+# options(scipen=9, digits = 3) 
+# ‘scipen’: integer. A penalty to be applied when deciding to print numeric values in fixed or exponential notation.  Positive values bias towards fixed and negative towards scientific notation: fixed notation will be preferred unless it is more than ‘scipen’ digits wider.
+# use scipen=999 to prevent scientific notation at all times
+```
+```{r xkablesummary}
+loadPkg("xtable")
+loadPkg("kableExtra")
+loadPkg("stringi")
+
+xkabledply = function(modelsmmrytable, title="Table", digits = 4, pos="left", bso="striped", wide=FALSE) { 
+  #' Combining base::summary, xtable, and kableExtra, to easily display model summary. 
+  #' wrapper for the base::summary function on model objects
+  #' Can also use as head for better display
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param modelsmmrytable This can be a generic table, a model object such as lm(), or the summary of a model object summary(lm()) 
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @param wide print table in long (FALSE) format or wide (TRUE) format
+  #' @return HTML table for display
+  #' @examples
+  #' library("xtable")
+  #' library("kableExtra")
+  #' xkabledply( df, title="Table testing", pos="left", bso="hover" )
+  #' xkabledply( ISLR::Hitters[1:5,] )
+  if (wide) { modelsmmrytable <- t(modelsmmrytable) }
+  modelsmmrytable %>%
+    xtable() %>% 
+    kable(caption = title, digits = digits) %>%
+    kable_styling(bootstrap_options = bso, full_width = FALSE, position = pos)
+}
+
+xkabledplyhead = function(df, rows=5, title="Head", digits = 4, pos="left", bso="striped") { 
+  xkabledply(df[1:rows, ], title, digits, pos, bso, wide=FALSE)
+}
+
+xkabledplytail = function(df, rows=5, title="Tail", digits = 4, pos="left", bso="striped") { 
+  trows = nrow(df)
+  xkabledply(df[ (trows-rows+1) : trows, ], title, digits, pos, bso, wide=FALSE)
+}
+
+xkablesummary = function(df, title="Table: Statistics summary.", digits = 4, pos="left", bso="striped") { 
+  #' Combining base::summary, xtable, and kableExtra, to easily display numeric variable summary of dataframes. 
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param df The dataframe.
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @return The HTML summary table for display, or for knitr to process into other formats 
+  #' @examples
+  #' xkablesummary( faraway::ozone )
+  #' xkablesummary( ISLR::Hitters, title="Five number summary", pos="left", bso="hover"  )
+  
+  s = summary(df) %>%
+    apply( 2, function(x) stringr::str_remove_all(x,c("Min.\\s*:\\s*","1st Qu.\\s*:\\s*","Median\\s*:\\s*","Mean\\s*:\\s*","3rd Qu.\\s*:\\s*","Max.\\s*:\\s*")) ) %>% # replace all leading words
+    apply( 2, function(x) stringr::str_trim(x, "right")) # trim trailing spaces left
+  
+  colnames(s) <- stringr::str_trim(colnames(s))
+  
+  if ( dim(s)[1] ==6 ) { rownames(s) <- c('Min','Q1','Median','Mean','Q3','Max') 
+  } else if ( dim(s)[1] ==7 ) { rownames(s) <- c('Min','Q1','Median','Mean','Q3','Max','NA') }
+  
+  xkabledply(s, title=title, digits = digits, pos=pos, bso=bso )
+}
+
+xkablevif = function(model, title="VIFs of the model", digits = 3, pos="left", bso="striped", wide=TRUE) { 
+  #' Combining faraway::vif, xtable, and kableExtra, to easily display numeric summary of VIFs for a model. 
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param model The lm or compatible model object.
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @param wide print table in long (FALSE) format or wide (TRUE) format
+  #' @return The HTML summary table of the VIFs for a model for display, or for knitr to process into other formats 
+  #' @examples
+  #' xkablevif( lm(Salary~Hits+RBI, data=ISLR::Hitters), wide=T )
+  
+  vifs = table( names(model$coefficients)[2:length(model$coefficients)] ) # remove intercept to set column names
+  vifs[] = faraway::vif(model) # set the values
+  if (wide) { vifs <- t(vifs) }
+  xkabledply( vifs, title=title, digits = digits, pos=pos, bso=bso )
+}
+```
+
+Our team project2 focuses on predicting selling price of used cars. The dataset taken is "Vehicle dataset: Used Cars data from websites",from source kaggle.This dataset can be used for a lot of purposes such as price prediction to exemplify the use of linear regression in Machine Learning. We have used models such as Logistic Regression, PCA and PCR. It contains over 8128 observations and 13 features. With the increase in car market, buying and selling of cars is increasing rapidly and that brings us to a door where many people are buying and selling the cars in the market, so to make this process more fluid and with a better market view, we are proposing a model which will take information related to the car and will predict the selling price. This will help to get a better idea on buying and selling cars. 
+
+```{r, results = 'markup'}
+vehicle <- read.csv("Car details v3.csv")
+x <- capture.output(dput(names(vehicle)))
+cat("The vehicle dataset consists of", nrow(vehicle), "observations with", ncol(vehicle), "variables. The variables are \n", x, "\n \n")
+cat("Some variables are identified as categorical: Fuel, transmission and seller_type, and others are numerical. But the numerical variables consist of string suffixes (units) in their values. Also, some were blanks. So the data needed to be cleaned. \n")
+
+# removing the rows with blanks and unwanted values
+vehicle <- vehicle[!((vehicle$mileage=="") | (vehicle$max_power==" bhp") |(vehicle$mileage == "0.0 kmpl")), ]
+
+# removing suffixes from the following columns
+vehicle$mileage <- gsub("kmpl","", as.character(vehicle$mileage))
+vehicle$mileage <- gsub("km/kg","", as.character(vehicle$mileage))
+vehicle$engine <- gsub("CC","", as.character(vehicle$engine))
+vehicle$max_power <- gsub("bhp","", as.character(vehicle$max_power))
+
+vehicle$torque <- sub("N.*", "", vehicle$torque)
+vehicle$torque <- sub("k.*", "", vehicle$torque)
+vehicle$torque <- sub("n.*", "", vehicle$torque)
+vehicle$torque <- sub("@.*", "", vehicle$torque)
+vehicle$torque <- sub("K.*", "", vehicle$torque)
+
+# converting the following variables to factor
+vehicle[c("fuel","transmission", "seller_type")] <- sapply(vehicle[c("fuel","transmission", "seller_type")],as.factor)
+
+# Assigning labels to owner_type
+vehicle$owner <- factor(vehicle$owner, labels = c(0,1,2,3,4), levels = c("Test Drive Car", "First Owner", "Second Owner", "Third Owner", "Fourth & Above Owner"))
+
+# converting the following variables to numeric
+vehicle[c("mileage","engine", "max_power", "torque", "owner")] <- sapply(vehicle[c("mileage","engine", "max_power", "torque", "owner")],as.numeric)
+
+# omitting na values
+vehicle <- na.omit(vehicle)
+cat("After cleaning the dataset, we have", nrow(vehicle), "observations.")
+```
+## SMART Question 1: Variation of Selling price with different variables
+
+### Part1: Categorical Variables
+```{r, results = 'markup'}
+library(dplyr)
+library(ggplot2)
+
+p1 <- ggplot(vehicle, aes(x = selling_price, y = fuel, color=fuel)) + geom_boxplot() + scale_x_continuous(limits = c(0, 2500000))
+p1
+cat("There is minimal overlap between the plots of each fuel category. We can conclude that there is a significant correlation between selling price and fuel type. In other words, the selling price depends greatly on the fuel type.")
+p2 <- ggplot(vehicle, aes(x = selling_price, y = seller_type, color=seller_type)) + geom_boxplot() + scale_x_continuous(limits = c(0, 2500000))
+p2
+cat("There is a significant overlap between the plots of seller types 'dealer' and 'trustmark dealer' which is expected as both are dealers in the end. But the overlap between 'individual' and other two is not significant. We can conclude that there is a correlation between selling price and seller type. In other words, the selling price depends on the seller type.")
+p3 <- ggplot(vehicle, aes(x = selling_price, y = transmission, color=transmission)) + geom_boxplot() + scale_x_continuous(limits = c(0, 2500000))
+p3
+cat("There is minimal overlap between the plots of each transmission category. We can conclude that there is a significant correlation between selling price and transmission type. In other words, the selling price depends greatly on the transmission type. As the data is from India, manual cars sell at a higher price than automatic ones.")
+```
+
+### Part2: Numerical Variables
+```{r, results = 'markup'}
+data_p4 <- vehicle %>%
+	group_by(year) %>%
+	summarise(mean_sellingPrice = mean(selling_price))
+p4 <- ggplot(data=data_p4, aes(x=year, y=mean_sellingPrice, group=1)) + geom_line()+ geom_point()+ scale_x_continuous(breaks = seq(1993, 2021, 2))
+p4
+cat("From this graph, we can see that the selling price greatly depends on the year of the model. It is higher for a more recent car than an older one. This observation is expected. \n")
+
+data_p5 <- vehicle %>%
+	group_by(owner) %>%
+	summarise(mean_sellingPrice = mean(selling_price))
+p5 <- ggplot(data=data_p5, aes(x=owner, y=mean_sellingPrice, group=1)) + geom_line()+ geom_point()
+p5
+cat("From this graph, we can see that the selling price greatly depends on the number of previous owners. The lesser the number of previous owner, more is the price which is expected. \n")
+
+data_p6 <- vehicle %>%
+	group_by(seats) %>%
+	summarise(mean_sellingPrice = mean(selling_price))
+p6 <- ggplot(data=data_p6, aes(x=seats, y=mean_sellingPrice, group=1)) + geom_line()+ geom_point()+ scale_x_continuous(breaks = seq(0, 14, 2))
+p6
+
+cat("From this graph, we can see that the selling price depends on the number of seats, increasing till 7 for an SUV and decreasing after that. \n")
+
+```
+
+
+```{r, results = 'markup'}
+ggplot(vehicle, aes(x=km_driven, y=selling_price)) + geom_point()
+cat("We can see that the graph is exponential, as km_driven increases, the selling_price decreases which is expected. So to calculate the mathematical relation between these variables, we plotted them after taking log of both because we will have a linear model. \n")
+
+plot(log10(vehicle$km_driven), log10(vehicle$selling_price))
+cat("We can plot a best fit line for these variables. \n")
+
+lin_mod <- lm(log10(vehicle$selling_price) ~ log10(vehicle$km_driven))
+
+abline(lin_mod, col = "red")
+
+  cat("Using the coefficients we obtained from this linear model, we plotted the best fit exponential curve onto the original scatter plot.")
+slope = lin_mod$coefficients[2]
+intercept = lin_mod$coefficients[1]
+x = vehicle$km_driven
+y = (10^intercept)*x^(slope)
+ggplot(vehicle)+ geom_point(aes(km_driven, selling_price), color = "yellow")+ geom_line(aes(x=km_driven, y= y, color = "exponential fit"))
+```
+```{r}
+model = lm(selling_price~ .-name, data = vehicle)
+summary(model)
+cat("We can conclude that all except fuel type and owner are highly significant variables. \n")
+```
+
+
+## SMART Question 2: Type of car that has been sold the most (in each category) and the preferred category in each variable
+```{r fig.height = 7, fig.width = 10, results = 'markup'}
+fuel_freq = as.data.frame(table(vehicle$fuel))
+p7 <- ggplot(vehicle, aes(x=fuel)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach Fuel type")+ theme(plot.title = element_text(size = 10, face = "bold"))
+
+sellerType_freq = as.data.frame(table(vehicle$seller_type))
+p8 <- ggplot(vehicle, aes(x=seller_type)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach seller type")+ theme(plot.title = element_text(size = 10, face = "bold"))
+
+transmission_freq = as.data.frame(table(vehicle$transmission))
+p9 <- ggplot(vehicle, aes(x=transmission)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach transmission type")+ theme(plot.title = element_text(size = 10, face = "bold"))
+
+year_freq = as.data.frame(table(vehicle$year))
+p10 <- ggplot(vehicle, aes(x=year)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach year 1994-2020")+ theme(plot.title = element_text(size = 10, face = "bold"))+ scale_x_continuous(breaks = seq(1994, 2020, 5))
+
+owner_freq = as.data.frame(table(vehicle$owner))
+p11 <- ggplot(vehicle, aes(x=owner)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach number of owners")+ theme(plot.title = element_text(size = 10, face = "bold"))
+
+seats_freq = as.data.frame(table(vehicle$seats))
+p12 <- ggplot(vehicle, aes(x=seats)) + geom_histogram(color="black", fill="green", binwidth = 1, stat = "count")+labs(title = "Number of cars sold for \neach number of seats")+ theme(plot.title = element_text(size = 10, face = "bold"))+ scale_x_continuous(breaks = seq(4, 14, 1))
+
+library("gridExtra")
+grid.arrange(p7, p8, p9, p10, p11, p12, ncol = 3, nrow = 2)
+```
+
+## SMART Question 3: Correlation between selling price and other variables
+```{r, results = 'markup'}
+cat("From the boxplots we generated for the categorical variables, we can see that there is minimal overlap between the plots of each category for the variables fuel and transmission. So, we can say that the selling price is highly correlated to the categories in these variables. But there is some significant overlap for categories 1 and 2 for the variable seller_type. Thus the selling price is correlated to the categories but not all, for the variable seller_type. \n\n")
+
+cat("To confirm the above conclusions, I ran one way Anova test for the categorical variables as follows: \n")
+#Fuel
+SP_fuel = aov(selling_price ~ fuel, data = vehicle)
+summary(SP_fuel)
+cat("As the p-value is less than the significance level 0.05, we can conclude that there are significant differences between the groups in fuel variable. \n \n")
+
+#Transmission
+SP_transmission = aov(selling_price ~ transmission, data = vehicle)
+summary(SP_transmission)
+cat("As the p-value is less than the significance level 0.05, we can conclude that there are significant differences between the groups in transmission variable. \n\n")
+
+#Seller Type
+SP_sellerType = aov(selling_price ~ seller_type, data = vehicle)
+summary(SP_sellerType)
+cat("As the p-value is less than the significance level 0.05, we can conclude that there are significant differences between the groups in seller_type variable. \n\n")
+
+cat("For the numerical variables, we can just plot the correlation matrix as follows: \n")
+
+library(ggcorrplot)
+
+df <- dplyr::select_if(vehicle, is.numeric)
+r <- cor(df, use="complete.obs")
+xkabledply(round(r,2))
+ggcorrplot(r, hc.order = TRUE, type = "lower", lab = TRUE)
+```
+
+## SMART Question 4: Predicting the selling price based on the variables.
+
+## Feature selection comparing methods: exhaustive, forward.
+
+### Part1: Exhaustive
+```{r, results = 'markup'}
+
+loadPkg("leaps")
+loadPkg("car")
+reg.best10 <- regsubsets(selling_price~. -name , data = vehicle, nvmax = 10, nbest = 1, method = "exhaustive")
+summary(reg.best10)
+plot(reg.best10, scale = "adjr2", main = "Adjusted R^2")
+plot(reg.best10, scale = "bic", main = "BIC")
+plot(reg.best10, scale = "Cp", main = "Cp")
+
+cat("considering we have to maximize R2, minimize BIC and CP, and minimize the number of variables to reduce model complexity, the following model seems the best. \n")
+
+best_model = lm(selling_price~ year+ km_driven+ seller_type+ transmission+ mileage+ max_power, data = vehicle)
+summary(best_model)
+```
+
+### Part2: Forward
+```{r, results = 'markup'}
+reg.forward10 <- regsubsets(selling_price~. -name, data = vehicle, nvmax = 10, nbest = 1, method = "forward")
+plot(reg.forward10, scale = "adjr2", main = "Adjusted R^2")
+plot(reg.forward10, scale = "bic", main = "BIC")
+plot(reg.forward10, scale = "Cp", main = "Cp")
+
+cat("considering we have to minimize the number of features keeping R2 maximum and BIC and CP minimum, we see we have the same model as we obtained using exhaustive method. \n")
+```
+## Linear regression model
+```{r, results = 'markup'}
+library(tidyverse)
+library(caret)
+
+set.seed(1000)
+vehicle_sample <- sample(2, nrow(vehicle), replace=TRUE, prob=c(0.75, 0.25))
+train <- vehicle[vehicle_sample==1, 2:13]
+test <- vehicle[vehicle_sample==2, 2:13]
+
+model <- lm(selling_price ~year+ km_driven+ seller_type+ transmission+ mileage+ max_power , data = train)
+
+summary(model)
+
+cat("The r-squared value of this model is", summary(model)$r.squared, ". \n")
+
+rsq <- function(x, y) summary(lm(y~x))$r.squared
+test$pred <- predict(model, test, type = "response")
+
+cat("The r-squared value after applying the linear regression model on the test set is", rsq(test$selling_price, test$pred), ". \n")
+
+cat("As we can see, both values are almost the same, around 0.67, which is expected. Also, a value of 0.67 means that our model explains 67% variation in the y-variable.")
+
+```
+## PCA-PCR
+```{r,results='markup'}
+
+nnd <-  subset(vehicle , select = -c(name,fuel,seller_type,transmission) ) 
+str(nnd)
+df = data.frame(scale(nnd))
+
+pca.out =prcomp(df , center = TRUE,scale =TRUE) # center=TRUE is the default
+summary(pca.out)
+xkabledply(pca.out$rotation)
+
+cat("
+PCR - 
+As you can see, two main results are printed, namely the validation error and the cumulative percentage of variance explained using n components.
+
+The cross validation results are computed for each number of components used so that we can easily check the score with a particular number of components without trying each combination on own.
+
+
+
+What we would like to see is a low cross validation error with a lower number of components than the number of variables in dataset. If this is not the case or if the smalles cross validation error occurs with a number of components close to the number of variables in the original data, then no dimensionality reduction occurs. 
+
+it looks like 4 components are enough to explain more than 80% of the variability in the data although the CV score is a little higher than with 8 components. Finally, note that 8 components explain all the variability as expected.")
+```
+
+
+``` {r,results= 'markup'}
+
+loadPkg("pls")
+
+#Again we want to scale our data and "CV" stands for cross validation, which is defaulted to RMSE
+
+pcr.fit=pcr(selling_price~.,data= df,scale=TRUE,validation ="CV")
+summary(pcr.fit)
+
+cat("By default, the pcr function computes the root mean squared error and the validationplot function plots this statistic, however you can choose to plot the usual mean squared error or the R2 by setting the val.type argument equal to “MSEP” or “R2” respectively")
+```
+
+
+```{r, results='markup'}
+# Plot the root mean squared error
+validationplot(pcr.fit)
+```
+
+```{r,results='markup'}
+# Plot the R2 for different number of PCs
+plot(pcr.fit, "validation", val.type = "R2")
+```
+
+
+## Conclusions
+
+```{r,results='markup'}
+cat("To build a prediction model for our dataset we did the following things: \n
+1. Perform exploratory data analysis (EDA) to check which variables affect our output variable which is the selling price of the car: Plot boxplots, line plots, histograms, Evaluate correlation matrix \n
+2. Feature selection \n
+3. Build a linear regression prediction model using the best features selected and test its R2 value. \n
+4. Build a PCR model by conducting PCA, to see if we can improve the R2 metric \n
+
+We concluded that the variables which affect the selling price the most are: 
+year, km_driven, seller_type, transmission, mileage, max_power. \n
+
+The maximum value of R2 that can be attained using linear models is around 0.68.\n
+")
+
+```
+
+## References
+
+Vehicle dataset: Used Cars data from websites. (2020). Car details v3.[Data file]. Retrieved from https://www.kaggle.com/nehalbirla/vehicle-dataset-from-cardekho
